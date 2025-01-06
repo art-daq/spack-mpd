@@ -42,10 +42,8 @@ def setup_subparser(subparsers):
 
 
 def build(project_config, generator, parallel, generator_options):
-    tty.msg("Getting project config variables")
     build_area = project_config["build"]
     compilers = spack.compilers.compilers_for_spec(project_config["compiler"])
-    tty.msg(f"Build area is {build_area}, and compilers are {compilers}. Asserting that {len(compilers)} == 1")
     assert len(compilers) == 1
     configure_list = [
         "cmake",
