@@ -49,6 +49,7 @@ def build(project_config, generator, parallel, generator_options):
         "cmake",
         "--preset",
         "default",
+        "-Wno-dev",
         project_config["source"],
         "-B",
         build_area,
