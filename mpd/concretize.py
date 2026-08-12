@@ -332,6 +332,7 @@ def ordered_roots(env, package_requirements):
     sorted_packages = toposort_packages(parent_children)
     return [install_prefixes[p] for p in sorted_packages]
 
+
 def verify_develop_versions(packages) -> None:
     """Verify that each developed package's recipe declares a "develop" version.
 
@@ -795,7 +796,7 @@ def handle_installation(project_config, env, packages, yes_to_all, compiler_syml
     finally:
         ev_shell.deactivate().apply_modifications()
 
-        print()
+    print()
     if result_code == 0:
         _add_compiler_env_vars(local_env_dir, compiler_symlinks_dir)
         _cmake_workaround_for_python_package(
