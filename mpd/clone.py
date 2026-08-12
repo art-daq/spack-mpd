@@ -1,20 +1,23 @@
 import os
-import os.path
 import re
 import select
+import shutil
 import subprocess
 import sys
+import textwrap
 import urllib
 from enum import Enum, auto
+from pathlib import Path
 
-import spack.llnl.util.filesystem as fs
-import spack.llnl.util.tty as tty
 import spack.util.git
+import spack.util.spack_yaml as syaml
 from spack.util import executable
 
+from . import init as mpd_init
 from .config import selected_project_config
 from .preconditions import State, preconditions
-from .util import bold, maybe_with_color
+from .spack_compat import fs, tty
+from .util import bold, gray, maybe_with_color, yellow
 
 SUBCOMMAND = "git-clone"
 ALIASES = ["g", "clone"]
@@ -59,15 +62,42 @@ def setup_subparser(subparsers):
         action="extend",
         nargs="+",
     )
+    git_parser.add_argument(
+        "--add-suite",
+        metavar="<suite YAML file>",
+        help="add one or more suite-definition YAML files",
+        action="extend",
+        nargs="+",
+    )
+    git_parser.add_argument(
+        "--remove-suite",
+        metavar="<suite name>",
+        help="remove one or more known suites by name",
+        action="extend",
+        nargs="+",
+    )
+    git_parser.add_argument(
+        "--prefer-ssh",
+        action="store_true",
+        help="prefer SSH for GitHub repositories and fall back to HTTPS if unavailable",
+    )
     git = git_parser.add_mutually_exclusive_group()
     help_msg = "fork GitHub repository or set origin to already forked repository"
     if not gh:
-        help_msg += maybe_with_color(
-            "y", "\n(not supported on this system - requires gh, which cannot be found)"
-        )
+        help_msg += yellow("\n(not supported on this system - requires gh, which cannot be found)")
     git.add_argument("--fork", action="store_true", help=help_msg)
-    git.add_argument("--help-repos", action="store_true", help="list supported repositories")
-    git.add_argument("--help-suites", action="store_true", help="list supported suites")
+    git.add_argument("--help-repos", action="store_true", help="list known repositories")
+    git.add_argument(
+        "--help-repos-with-urls",
+        action="store_true",
+        help="list known repositories with full URLs",
+    )
+    git.add_argument("--help-suites", action="store_true", help="list known suites")
+    git.add_argument(
+        "--help-suites-with-paths",
+        action="store_true",
+        help="list known suites and suite YAML file paths",
+    )
 
 
 class CloneState(Enum):
@@ -143,7 +173,7 @@ class GitHubRepo:
 class SimpleGitRepo:
     def __init__(self, url):
         path = urllib.parse.urlparse(url).path
-        self._name = os.path.basename(path).replace(".git", "")
+        self._name = Path(path).name.replace(".git", "")
         self._url = url
 
     def name(self):
@@ -162,195 +192,157 @@ class GitHubOrg:
 
 
 class Suite:
-    def __init__(self, name, gh_org_name=None, repos=[]):
+    def __init__(self, name, gh_org_name=None, repos=None, suite_file=None):
         self.name = name
         self.org_name = gh_org_name
         self.org = GitHubOrg(self.org_name)
-        self.repos = repos
+        self.repos = repos or []
+        self.suite_file = suite_file
 
     def repositories(self):
         return {p: self.org.repo(p) for p in self.repos}
 
 
-# N.B. Listing of repositories is done in alphabetical order.
+def _suite_files_path():
+    return mpd_init.known_suites_dir(mpd_init.mpd_config_dir())
 
-_supported_suites = [
-    Suite(
-        "art",
-        gh_org_name="art-framework-suite",
-        repos=[
-            "art",
-            "canvas",
-            "cetlib",
-            "cetlib-except",
-            "fhicl-cpp",
-            "hep-concurrency",
-            "messagefacility",
-        ],
-    ),
-    Suite(
-        "artdaq",
-        gh_org_name="art-daq",
-        repos=[
-            "artdaq_core",
-            "artdaq_core_demo",
-            "artdaq_daqinterface",
-            "artdaq_database",
-            "artdaq_epics_plugin",
-            "artdaq_ganglia_plugin",
-            "artdaq_mfextensions",
-            "artdaq_mpich_plugin",
-            "artdaq_utilities",
-        ],
-    ),
-    Suite(
-        "critic",
-        gh_org_name="art-framework-suite",
-        repos=[
-            "art",
-            "art-root-io",
-            "canvas",
-            "canvas-root-io",
-            "cetlib",
-            "cetlib-except",
-            "critic",
-            "fhicl-cpp",
-            "fhicl-py",
-            "gallery",
-            "hep-concurrency",
-            "messagefacility",
-        ],
-    ),
-    Suite(
-        "dune",
-        gh_org_name="DUNE",
-        repos=[
-            "duneana",
-            "dunecalib",
-            "dunecore",
-            "dunedataprep",
-            "duneexamples",
-            "duneopdet",
-            "duneprototypes",
-            "dunereco",
-            "dunesim",
-            "dunesw",
-            "duneutil",
-            "protoduneana",
-        ],
-    ),
-    Suite(
-        "gallery",
-        gh_org_name="art-framework-suite",
-        repos=[
-            "canvas",
-            "canvas-root-io",
-            "cetlib",
-            "cetlib-except",
-            "fhicl-cpp",
-            "fhicl-py",
-            "gallery",
-            "hep-concurrency",
-            "messagefacility",
-        ],
-    ),
-    Suite(
-        "larsoft",
-        gh_org_name="LArSoft",
-        repos=[
-            "larana",
-            "larcore",
-            "lardata",
-            "lareventdisplay",
-            "larevt",
-            "larexamples",
-            "larfinder",
-            "larg4",
-            "larpandora",
-            "larreco",
-            "larrecodnn",
-            "larsim",
-            "larsimdnn",
-            "larsimrad",
-            "larsoft",
-            "larwirecell",
-        ],
-    ),
-    Suite(
-        "larsoftobj",
-        gh_org_name="LArSoft",
-        repos=["larcorealg", "larcoreobj", "lardataalg", "lardataobj", "larvecutils"],
-    ),
-    Suite(
-        "nu",
-        gh_org_name="NuSoftHEP",
-        repos=["nuevdb", "nufinder", "nug4", "nugen", "nurandom", "nusimdata", "nutools"],
-    ),
-    Suite(
-        "sbn",
-        gh_org_name="SBNSoftware",
-        repos=[
-            "icarus_signal_processing",
-            "icarusalg",
-            "icaruscode",
-            "icarusutil",
-            "sbnanaobj",
-            "sbnci",
-            "sbncode",
-            "sbndcode",
-            "sbndutil",
-            "sbnobj",
-        ],
-    ),
-    Suite(
-        "sbndaq",
-        gh_org_name="SBNSoftware",
-        repos=[
-            "sbndaq",
-            "sbndaq_artdaq",
-            "sbndaq_artdaq_core",
-            "sbndaq_decode",
-            "sbndaq_minargon",
-            "sbndaq_online",
-            "sbndaq_xporter",
-        ],
-    ),
-    Suite(
-        "uboone",
-        gh_org_name="uboone",
-        repos=[
-            "ubana",
-            "ubcore",
-            "ubcrt",
-            "ubcv",
-            "ubevt",
-            "ublite",
-            "ubobj",
-            "uboonecode",
-            "uboonedata",
-            "ubraw",
-            "ubreco",
-            "ubsim",
-            "ubutil",
-        ],
-    ),
-]
+
+def _suite_seed_marker_path():
+    return _suite_files_path() / ".builtins-seeded"
+
+
+def _populate_known_suites():
+    suite_files_path = _suite_files_path()
+    suite_files_path.mkdir(exist_ok=True)
+    if _suite_seed_marker_path().exists():
+        return
+
+    for suite_file in (Path(__file__).parent / "builtin_suites").glob("*-suite.yaml"):
+        destination = suite_files_path / suite_file.name
+        if destination.exists():
+            continue
+        shutil.copyfile(suite_file, destination)
+
+    _suite_seed_marker_path().touch(exist_ok=True)
+
+
+def _load_suite_from_file(suite_file):
+    with open(suite_file) as f:
+        loaded = syaml.load(f)
+
+    if not isinstance(loaded, dict) or len(loaded) != 1:
+        tty.die("Suite definition must contain exactly one top-level suite mapping: " + suite_file)
+
+    suite_name, suite_info = next(iter(loaded.items()))
+    if not isinstance(suite_name, str) or not suite_name:
+        tty.die(f"Invalid suite definition in {suite_file}: expected a non-empty suite name")
+
+    if not isinstance(suite_info, dict):
+        tty.die(f"Invalid suite definition in {suite_file}: expected a mapping")
+
+    gh_org_name = suite_info.get("gh_org_name")
+    if gh_org_name is not None and not isinstance(gh_org_name, str):
+        tty.die(f"Invalid gh_org_name in {suite_file}: expected a string")
+
+    repos = suite_info.get("repos", [])
+    if not isinstance(repos, list) or not all(isinstance(repo, str) for repo in repos):
+        tty.die(f"Invalid repos list in {suite_file}: expected a sequence of strings")
+
+    suite_file_display = str(Path(suite_file).absolute())
+    return Suite(suite_name, gh_org_name=gh_org_name, repos=repos, suite_file=suite_file_display)
+
+
+def _load_known_suites():
+    suites = []
+    _populate_known_suites()
+    suite_files_path = _suite_files_path()
+
+    if not suite_files_path.is_dir():
+        return suites
+
+    for suite_file in sorted(suite_files_path.iterdir()):
+        if not suite_file.name.endswith("-suite.yaml"):
+            continue
+
+        suites.append(_load_suite_from_file(suite_file))
+
+    return suites
+
+
+def _add_suite_file(suite_file):
+    suite_file = Path(suite_file).expanduser().absolute()
+
+    if not suite_file.is_file():
+        tty.die(f"Suite file does not exist: {suite_file}")
+
+    if not suite_file.name.endswith("-suite.yaml"):
+        tty.die(f"Suite file must end with '-suite.yaml': {suite_file}")
+
+    suite = _load_suite_from_file(suite_file)
+    suite_files_path = _suite_files_path()
+    suite_files_path.mkdir(exist_ok=True)
+    destination = suite_files_path / suite_file.name
+    if destination.exists():
+        tty.warn(f"A suite file for {bold(suite.name)} already exists at {destination}")
+        should_overwrite = tty.get_yes_or_no(
+            "Would you like to overwrite the existing suite file?", default=False
+        )
+        if not should_overwrite:
+            tty.info(f"Skipped adding suite from {gray(str(suite_file))}")
+            return False
+
+    shutil.copyfile(suite_file, destination)
+    tty.msg(f"Added suite {bold(suite.name)} from {gray(str(suite_file))}")
+    return True
+
+
+def _remove_suite(suite_name):
+    matching = [suite for suite in _load_known_suites() if suite.name == suite_name]
+    if not matching:
+        tty.die(f"Cannot remove unknown suite {bold(suite_name)}")
+
+    suite = matching[0]
+    should_remove = tty.get_yes_or_no(
+        f"Would you like to remove suite {bold(suite_name)}?", default=False
+    )
+    if not should_remove:
+        tty.info(f"Skipped removing suite {bold(suite_name)}")
+        return False
+
+    suite_file = Path(suite.suite_file)
+    suite_file.unlink()
+    tty.msg(f"Removed suite {bold(suite_name)} from {gray(str(suite_file))}")
+    return True
 
 
 def suite_for(suite_name: str) -> Suite:
-    return next(filter(lambda s: s.name == suite_name, _supported_suites))
+    return next(filter(lambda s: s.name == suite_name, _load_known_suites()))
 
 
-def help_suites():
+def help_suites(show_suite_paths=False):
     print()
-    tty.msg("Supported suites:\n")
-    title = "Suite"
-    suite_width = max(len(s.name) for s in _supported_suites)
-    print(f"  {title:<{suite_width}}  Repositories")
-    print("  " + "-" * 100)
-    for suite in sorted(_supported_suites, key=lambda s: s.name):
-        repo_string = " ".join(suite.repos)
-        print(f"  {suite.name:<{suite_width}}  {repo_string}")
+    tty.msg("Known suites:\n")
+    width = shutil.get_terminal_size(fallback=(100, 24)).columns
+    initial_indent = "    - "
+    subsequent_indent = "      "
+    for suite in sorted(_load_known_suites(), key=lambda s: s.name):
+        suite_source = gray(f" (see {suite.suite_file})") if show_suite_paths else ""
+        print(f"  {yellow(suite.name)}{suite_source}")
+        if suite.repos:
+            repo_text = ", ".join(suite.repos)
+            print(
+                textwrap.fill(
+                    repo_text,
+                    width=max(width, 40),
+                    initial_indent=initial_indent,
+                    subsequent_indent=subsequent_indent,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
+        else:
+            print("    (no repositories listed)")
+        print()
     print()
 
 
@@ -378,7 +370,7 @@ def _known_nu_specs():
 def _known_dune_specs():
     suite = suite_for("dune")
     known_specs = suite.repositories()
-    others = ["garsoft", "garana", "duneanaobj", "dunepdlegacy", "sandreco", "webevd"]
+    others = ["garsoft", "garana", "sandreco", "webevd"]
     known_specs.update({p: suite.org.repo(p) for p in others})
     return known_specs
 
@@ -386,7 +378,7 @@ def _known_dune_specs():
 def _known_sbn_specs():
     suite = suite_for("sbn")
     known_specs = suite.repositories()
-    others = ["sbnana", "sbndata", "sbndqm", "sbndaq_artdaq_core"]
+    others = ["sbndata", "sbndqm"]
     known_specs.update({p: suite.org.repo(p) for p in others})
     # sbncode needs special instructions:
     #  ["sbncode", { github => ["$sbn_github/sbncode", git_args => [ qw(--recurse-submodules) ]] }]
@@ -423,28 +415,75 @@ def known_repos():
     return result
 
 
-def help_repos():
-    print()
-    tty.msg("Supported repositories:\n")
+def _repo_location(repo, with_urls=False):
+    url = repo.url()
+    if with_urls:
+        return url
 
+    github_prefix = "https://github.com/"
+    git_suffix = ".git"
+    if url.startswith(github_prefix) and url.endswith(git_suffix):
+        return url[len(github_prefix) : -len(git_suffix)]
+
+    return url
+
+
+def _repo_organization(repo):
+    path = urllib.parse.urlparse(repo.url()).path.strip("/")
+    if not path:
+        return None
+    return path.split("/", 1)[0]
+
+
+def help_repos(with_urls=False):
+    print()
     repos = known_repos()
+    orgs = {_repo_organization(repo) for repo in repos.values()}
+    orgs.discard(None)  # discard any repos that don't have a GitHub organization
+    tty.msg(f"Known repositories: {len(repos)} across {len(orgs)} organizations\n")
+
     title = "Repository name"
+    location_title = "URL" if with_urls else "GitHub Organization/Repository"
     repo_width = max(len(s) for s in repos.keys())
-    print(f"  {title:<{repo_width}}  URL")
-    print("  " + "-" * 100)
+    print(f"  {title:<{repo_width}}  {location_title}")
+    print("  " + "-" * repo_width + "  " + "-" * 30)
     for name, repo in sorted(repos.items()):
-        print(f"  {name:<{repo_width}}  {repo.url()}")
+        print(f"  {name:<{repo_width}}  {_repo_location(repo, with_urls=with_urls)}")
     print()
 
 
-def _clone(repo, srcs_area):
+def _github_ssh_url(url):
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.netloc != "github.com":
+        return None
+
+    path = parsed.path.lstrip("/")
+    if not path:
+        return None
+
+    return f"git@github.com:{path}"
+
+
+def _clone(repo, srcs_area, prefer_ssh=False):
     git = spack.util.git.git(required=True)
     git.add_default_arg("-C", srcs_area)
-    local_src_dir = os.path.join(srcs_area, repo.name())
-    result = git("clone", repo.url(), local_src_dir, fail_on_error=False, error=str)
+
+    clone_url = repo.url()
+    used_https_fallback = False
+    if prefer_ssh:
+        ssh_url = _github_ssh_url(clone_url)
+        if ssh_url:
+            git("ls-remote", ssh_url, fail_on_error=False, output=str, error=str)
+            if git.returncode == 0:
+                clone_url = ssh_url
+            else:
+                used_https_fallback = True
+
+    local_src_dir = Path(srcs_area) / repo.name()
+    result = git("clone", clone_url, str(local_src_dir), fail_on_error=False, error=str)
     if "Cloning into" in result and git.returncode == 0:
-        return None
-    return result.rstrip()
+        return None, used_https_fallback
+    return result.rstrip(), used_https_fallback
 
 
 def _color_from(status):
@@ -492,15 +531,18 @@ def _fork_repository():
     return ansi_escape.sub("", result)
 
 
-def clone_repos(repos, should_fork, srcs_area, local_area):
+def clone_repos(repos, should_fork, srcs_area, local_area, prefer_ssh=False):
     name_width = max(len(n) + 1 for n in repos.keys())
     name_width = max(name_width, 20)
     changed_srcs_dir = False
     for name, repo in repos.items():
-        result = _clone(repo, srcs_area)
+        result, used_https_fallback = _clone(repo, srcs_area, prefer_ssh=prefer_ssh)
         status = RepoStatus()
         if result is None:
-            status.update(CloneState.DONE, clone_msg="cloned")
+            clone_msg = "cloned"
+            if used_https_fallback:
+                clone_msg += " via https fallback"
+            status.update(CloneState.DONE, clone_msg=clone_msg)
             changed_srcs_dir = True
         elif "already exists" in result:
             status.update(CloneState.SKIPPED, clone_msg="already cloned")
@@ -508,7 +550,7 @@ def clone_repos(repos, should_fork, srcs_area, local_area):
             status.update(CloneState.ERROR, clone_msg=result)
 
         if status.okay() and should_fork:
-            with fs.working_dir(os.path.join(srcs_area, name)):
+            with fs.working_dir(str(Path(srcs_area) / name)):
                 result = gh("repo", "set-default", repo.url(), output=str, error=str)
                 if gh.returncode != 0:
                     status.update(
@@ -541,6 +583,25 @@ def clone_repos(repos, should_fork, srcs_area, local_area):
 
 
 def process(args):
+    # Handle suite additions before clone operations so a command like
+    #   spack mpd g --add-suite <suite-file> --suites <suite-name>
+    # can use the newly added suite in the same invocation.
+    added_suite = False
+    if args.add_suite:
+        preconditions(State.INITIALIZED)
+        print()
+        for suite_file in args.add_suite:
+            if _add_suite_file(suite_file):
+                added_suite = True
+
+    removed_suite = False
+    if args.remove_suite:
+        preconditions(State.INITIALIZED)
+        print()
+        for suite_name in args.remove_suite:
+            if _remove_suite(suite_name):
+                removed_suite = True
+
     if args.fork:
         if not gh:
             tty.die(
@@ -566,7 +627,13 @@ def process(args):
             for repo_spec in args.repos:
                 repo = repos.get(repo_spec, SimpleGitRepo(repo_spec))
                 repos_to_clone[repo.name()] = repo
-            if clone_repos(repos_to_clone, should_fork, config["source"], config["local"]):
+            if clone_repos(
+                repos_to_clone,
+                should_fork,
+                config["source"],
+                config["local"],
+                prefer_ssh=args.prefer_ssh,
+            ):
                 changed_srcs_dir = True
 
         if args.suites:
@@ -585,7 +652,11 @@ def process(args):
                     preamble += " and forking"
                 tty.msg(f"{preamble} suite {bold(s)}:\n")
                 if clone_repos(
-                    suite.repositories(), should_fork, config["source"], config["local"]
+                    suite.repositories(),
+                    should_fork,
+                    config["source"],
+                    config["local"],
+                    prefer_ssh=args.prefer_ssh,
                 ):
                     changed_srcs_dir = True
 
@@ -596,14 +667,24 @@ def process(args):
             tty.msg("No repositories added\n")
         return
 
+    if args.add_suite or args.remove_suite:
+        print()
+        if added_suite or removed_suite:
+            tty.msg("Suite definitions updated\n")
+        else:
+            tty.msg("No suite definitions changed\n")
+        return
+
     preconditions(State.INITIALIZED)
 
     if args.help_suites:
         help_suites()
+    elif args.help_suites_with_paths:
+        help_suites(show_suite_paths=True)
     elif args.help_repos:
         help_repos()
+    elif args.help_repos_with_urls:
+        help_repos(with_urls=True)
     else:
         print()
-        tty.die(
-            f"At least one option required when invoking 'spack {' '.join(sys.argv[1:])}'" "\n"
-        )
+        tty.die(f"At least one option required when invoking 'spack {' '.join(sys.argv[1:])}'\n")

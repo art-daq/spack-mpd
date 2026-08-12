@@ -20,7 +20,7 @@ developers.
       recommend you clone the Fermilab fork of Spack using our bootstrap script:
       
       ```console
-      wget https://github.com/FNALssi/fermi-spack-tools/raw/refs/heads/fnal-develop/bin/bootstrap
+      wget https://github.com/FNALssi/fermi-spack-tools/raw/refs/heads/fnal-v1.1.1/bin/bootstrap
       bash bootstrap $PWD/spack
       ```
 
@@ -56,7 +56,7 @@ developers.
 8. Helper commands
    1. [MPD status](doc/Helpers.md#status)
    2. [Cloning repositories to develop](doc/Helpers.md#cloning-repositories-to-develop)
-   3. [Listing projects](doc/Helpers.md#listing-available-projects)
+   3. [Listing projects](doc/Helpers.md#listing-projects)
 
 ## Limitations
 

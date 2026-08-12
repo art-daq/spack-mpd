@@ -1,9 +1,8 @@
 from pathlib import Path
 
-import spack.llnl.util.tty as tty
-
 from . import config
 from .preconditions import State, preconditions
+from .spack_compat import tty
 from .util import cyan, get_number, gray
 
 SUBCOMMAND = "select"
@@ -97,7 +96,7 @@ def process(args):
         return
 
     if project in config.selected_projects():
-        tty.warn(f"Project {cyan(project)} selected in another shell.  " "Use with caution.")
+        tty.warn(f"Project {cyan(project)} selected in another shell.  Use with caution.")
 
     config.selected_project_token().write_text(project)
     tty.info(f"Project {cyan(project)} selected")

@@ -1,0 +1,16 @@
+dune:
+  gh_org_name: DUNE
+  repos:
+    - duneana
+    - duneanaobj
+    - dunecalib
+    - dunecore
+    - dunedataprep
+    - duneexamples
+    - duneopdet
+    - duneprototypes
+    - dunereco
+    - dunesim
+    - dunesw
+    - duneutil
+    - protoduneana

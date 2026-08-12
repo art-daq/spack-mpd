@@ -5,8 +5,9 @@
 import contextlib
 import re
 
-import spack.llnl.util.filesystem as fs
-from spack.extensions.mpd import config
+import spack.util.spack_yaml as syaml
+from spack.extensions.mpd import concretize, config
+from spack.extensions.mpd.spack_compat import fs
 from spack.main import SpackCommand
 
 
@@ -18,7 +19,7 @@ def mpd(*args):
 
 
 @contextlib.contextmanager
-def new_project(name=None, top=None, srcs=None, cwd=None):
+def new_project(name=None, top=None, srcs=None, cwd=None, extra_args=None):
     arguments = []
     if name:
         arguments += ["--name", name]
@@ -26,6 +27,8 @@ def new_project(name=None, top=None, srcs=None, cwd=None):
         arguments += ["-T", str(top)]
     if srcs:
         arguments += ["-S", str(srcs)]
+    if extra_args:
+        arguments += extra_args
 
     cm = contextlib.nullcontext()
     if cwd:
@@ -123,3 +126,98 @@ def test_mpd_refresh(with_mpd_init, tmp_path):
         assert "Refreshing project: e" in out
         new_cfg = config.selected_project_config()
         assert new_cfg["cxxstd"]["value"] == "20"
+
+
+def test_new_project_accepts_env_var_prepend(with_mpd_init, tmp_path):
+    with new_project(
+        name="test-env-arg",
+        cwd=tmp_path,
+        extra_args=["--env-var-prepend", "MY_ENVIRONMENT_VARIABLE=my_string"],
+    ) as out:
+        assert "Creating project: test-env-arg" in out
+        project_cfg = config.selected_project_config()
+        assert project_cfg["env_var_prepend"] == ["MY_ENVIRONMENT_VARIABLE=my_string"]
+
+
+def test_refresh_accepts_env_var_prepend(with_mpd_init, tmp_path):
+    with new_project(name="refresh-env-arg", cwd=tmp_path):
+        out = mpd("refresh", "--env-var-prepend", "MY_ENVIRONMENT_VARIABLE=my_string")
+        assert "Refreshing project: refresh-env-arg" in out
+        project_cfg = config.selected_project_config()
+        assert project_cfg["env_var_prepend"] == ["MY_ENVIRONMENT_VARIABLE=my_string"]
+
+
+def test_add_env_var_prepend_paths(tmp_path):
+    local_dir = tmp_path / "local"
+    local_dir.mkdir()
+    env_yaml = local_dir / "spack.yaml"
+
+    with open(env_yaml, "w") as f:
+        syaml.dump(
+            {"spack": {"env_vars": {"prepend_path": {"PATH": "/tmp/compilers"}}}},
+            stream=f,
+            default_flow_style=False,
+        )
+
+    build_dir = tmp_path / "build"
+    project_config = {
+        "local": str(local_dir),
+        "build": str(build_dir),
+        "srcs": {"pkg2": "pkg2", "pkg1": "pkg1"},
+        "env_var_prepend": ["MY_ENVIRONMENT_VARIABLE=my_string"],
+    }
+
+    concretize._add_env_var_prepend_paths(project_config)
+
+    with open(env_yaml, "r") as f:
+        loaded = syaml.load(f)
+
+    expected = ":".join(
+        [str(build_dir / "pkg1" / "my_string"), str(build_dir / "pkg2" / "my_string")]
+    )
+    prepend_path = loaded["spack"]["env_vars"]["prepend_path"]
+    assert prepend_path["PATH"] == "/tmp/compilers"
+    assert prepend_path["MY_ENVIRONMENT_VARIABLE"] == expected
+
+
+def test_parse_dependency_spec_preserves_dependency_constraints_spacing():
+    pkg_name, constraints = config.parse_dependency_spec(
+        "py-llvmlite ^llvm libcxx=none libunwind=none"
+    )
+
+    assert pkg_name == "py-llvmlite"
+    assert constraints == ["^llvm libcxx=none libunwind=none"]
+
+
+def test_categorize_constraints_parses_dependency_name_with_space_separated_constraints():
+    constraint_map = config.categorize_constraints(["^llvm libcxx=none libunwind=none"])
+
+    assert "llvm" in constraint_map
+    assert constraint_map["llvm"] == {
+        "value": "llvm",
+        "variant": "^llvm libcxx=none libunwind=none",
+    }
+
+
+def test_format_compiler_help_message_empty_compiler_list():
+    msg = config._format_compiler_help_message([])
+
+    assert msg == (
+        "No compilers are configured in this Spack instance. "
+        "Configure one manually or run `spack compiler find`."
+    )
+
+
+def test_format_compiler_help_message_lists_known_compilers_sorted_and_unique():
+    class FakeCompiler:
+        def __init__(self, spec):
+            self.spec = spec
+
+        def __str__(self):
+            return self.spec
+
+    msg = config._format_compiler_help_message(
+        [FakeCompiler("gcc@12.2.0"), FakeCompiler("clang@16.0.0"), FakeCompiler("gcc@12.2.0")]
+    )
+
+    assert msg == "Available compilers:\n  clang@16.0.0\n  gcc@12.2.0"

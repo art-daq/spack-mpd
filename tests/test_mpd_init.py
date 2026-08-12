@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: (Apache-2.0 OR MIT)
 import spack.paths
+from spack.extensions.mpd import init
 from spack.main import SpackCommand
 
 mpd = SpackCommand("mpd")
@@ -11,10 +12,14 @@ mpd = SpackCommand("mpd")
 def test_mpd_init(tmp_mpd_dir):
     out = mpd("init")
     assert f"MPD initialized for Spack instance at {spack.paths.prefix}" in out
+    suites_dir = init.known_suites_dir(init.mpd_config_dir())
+    assert suites_dir.exists()
 
     out = mpd("init")
     assert f"Warning: MPD already initialized for Spack instance at {spack.paths.prefix}" in out
 
     out = mpd("init", "-f", "-y")
-    assert "Warning: Reinitializing MPD on this system will remove all MPD projects" in out
+    assert (
+        "Warning: Reinitializing MPD for this Spack instance will remove all MPD projects" in out
+    )
     assert f"MPD initialized for Spack instance at {spack.paths.prefix}" in out
