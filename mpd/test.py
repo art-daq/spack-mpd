@@ -1,9 +1,9 @@
 import subprocess
-
-import llnl.util.tty as tty
+import sys
 
 from .config import selected_project_config
-from .preconditions import State, preconditions
+from .preconditions import State, activate_development_environment, preconditions
+from .spack_compat import tty
 from .util import maybe_with_color
 
 SUBCOMMAND = "test"
@@ -29,17 +29,23 @@ def setup_subparser(subparsers):
 
 
 def process(args):
-    preconditions(State.INITIALIZED, State.SELECTED_PROJECT, State.ACTIVE_ENVIRONMENT)
+    preconditions(State.INITIALIZED, State.SELECTED_PROJECT, State.PACKAGES_TO_DEVELOP)
 
     config = selected_project_config()
     build_dir = config["build"]
+
+    activate_development_environment(config["local"])
 
     arguments = ["ctest", "--test-dir", build_dir]
     if args.parallel:
         arguments.append(f"-j{args.parallel}")
 
+    arguments += args.test_options
+
     arguments_str = " ".join(arguments)
     print()
     tty.msg("Testing with command:\n\n" + maybe_with_color("c", arguments_str) + "\n")
 
-    subprocess.run(arguments)
+    result = subprocess.run(arguments)
+    if result.returncode != 0:
+        sys.exit(result.returncode)

@@ -9,7 +9,7 @@ requirements:
 
 - The white check mark :white_check_mark: indicates what is required
   to invoke the command (i.e. `spack mpd build` requires MPD to be
-  initialized, a selected project, and an active environment).
+  initialized and a selected project).
 - The :x: symbol indicates what is forbidden in order to invoke the
   command (i.e. `spack mpd rm-project` requires MPD to be initialized,
   forbids that a project is selected, and forbids that an environment
@@ -20,17 +20,21 @@ requirements:
 | Command | MPD initialized | Selected project | Active environment |
 | --- | :---: | :---: | :---: |
 | `spack mpd init` | | | |
-| `spack mpd list` | | | |
+| `spack mpd list` | :white_check_mark: | | |
 | `spack mpd new-project` | :white_check_mark: | | :x: |
 | `spack mpd select` | :white_check_mark: | | :x: |
 | `spack mpd clear` | :white_check_mark: | | :x: |
-| `spack mpd git-clone` | :white_check_mark: | :white_check_mark: | |
-| `spack mpd refresh` | :white_check_mark: | :white_check_mark: | |
+| `spack mpd git-clone` | :white_check_mark: | :white_check_mark: [^2] | |
+| `spack mpd refresh` | :white_check_mark: | :white_check_mark: | :x: |
 | `spack mpd zap` | :white_check_mark: | :white_check_mark: | |
-| `spack mpd build` | :white_check_mark: | :white_check_mark: | :white_check_mark: |
-| `spack mpd install` | :white_check_mark: | :white_check_mark: | :white_check_mark: |
-| `spack mpd test` | :white_check_mark: | :white_check_mark: | :white_check_mark: |
-| `spack mpd rm-project` | :white_check_mark: | :x: | :x: |
+| `spack mpd build` | :white_check_mark: | :white_check_mark: | |
+| `spack mpd install` | :white_check_mark: | :white_check_mark: | |
+| `spack mpd test` | :white_check_mark: | :white_check_mark: | |
+| `spack mpd rm-project` | :white_check_mark: | :x: [^1] | :x: |
+
+[^1]: Without `--force`, `rm-project` requires that no project is selected. With `--force`, a selected project is permitted.
+
+[^2]: Cloning repositories (via a `<repo spec>` or `--suites`) requires a selected project. The suite-management and help options (`--add-suite`, `--remove-suite`, `--help-repos`, `--help-repos-with-urls`, `--help-suites`, `--help-suites-with-paths`) require only that MPD is initialized.
 
 ## Selecting a project
 
@@ -40,8 +44,10 @@ The following actions will select a project
    automatically select the project after it has been created.
 2. Activating a Spack environment with a given name will automatically
    select the corresponding project.
-3. Explicitly invoking `spack mpd select <project>` will select the
-   specified project, assuming it is exists.
+3. Explicitly invoking `spack mpd select`:
+   1. `spack mpd select -p <project>` will select the specified project by name, assuming it exists.
+   2. `spack mpd select <top-level directory of project>` will select the project corresponding to the specified directory.
+   3. `spack mpd select` (with no arguments) will (a) provide a menu of existing MPD projects and allow you to specify which one you would like to select, or (b) select the only MPD project if only one exists.
 
 You can tell which project is selected by invoking `spack mpd
 list`---the selected project is indicated with a right-pointing
@@ -52,10 +58,10 @@ $ spack mpd list
 
 ==> Existing MPD projects:
 
-   Project name    Environment status
-   ------------    ------------------------------
-   nu-devel        (none)
- ▶ art-devel       installed
+   Project name    Sources directory
+   ------------    -----------------
+   nu-devel        /scratch/knoepfel/nu-devel/srcs
+ ▶ art-devel       /scratch/knoepfel/art-devel/srcs
 
 ```
 
@@ -70,10 +76,10 @@ $ spack mpd list
 
 ==> Existing MPD projects:
 
-   Project name    Environment status
-   ------------    ------------------------------
-   nu-devel        (none)
-   art-devel       installed
+   Project name    Sources directory
+   ------------    -----------------
+   nu-devel        /scratch/knoepfel/nu-devel/srcs
+   art-devel       /scratch/knoepfel/art-devel/srcs
 ```
 
 > [!WARNING]
@@ -101,10 +107,10 @@ $ spack mpd list
 
 ==> Existing MPD projects:
 
-   Project name    Environment status
-   ------------    ------------------
-   nu-devel        (none)
- ▶ art-devel       installed           Warning: used by more than one shell
+   Project name    Sources directory
+   ------------    -----------------
+   nu-devel        /scratch/knoepfel/nu-devel/srcs
+ ▶ art-devel       /scratch/knoepfel/art-devel/srcs           Warning: used by more than one shell
 ```
 
 ## Activating a Spack environment
