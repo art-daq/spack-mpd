@@ -332,9 +332,6 @@ def ordered_roots(env, package_requirements):
     sorted_packages = toposort_packages(parent_children)
     return [install_prefixes[p] for p in sorted_packages]
 
-
-<<<<<<< HEAD
-=======
 def verify_develop_versions(packages) -> None:
     """Verify that each developed package's recipe declares a "develop" version.
 
