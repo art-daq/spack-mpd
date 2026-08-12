@@ -1,10 +1,12 @@
+import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-import spack.llnl.util.tty as tty
 import spack.util.spack_yaml as syaml
+
+from .spack_compat import tty
 
 
 def bold(msg):
@@ -83,8 +85,12 @@ def spack_cmd_line():
     return f"spack {' '.join(sys.argv[1:])}"
 
 
-def remove_dir(dir_path):
-    """Remove a directory with retry logic for macOS .DS_Store issues."""
+def remove_dir(dir_path, keep_dir=False):
+    """Remove a directory with retry logic for macOS .DS_Store issues.
+
+    If `keep_dir` is True, keep the top-level directory but remove all of its
+    contents. Retries on macOS to work around .DS_Store locking issues.
+    """
     # On macOS, retry removal due to .DS_Store file issues
     max_attempts = 3 if sys.platform == "darwin" else 1
 
@@ -98,25 +104,56 @@ def remove_dir(dir_path):
                 stderr=subprocess.DEVNULL,
             )
 
-        # Now remove the directory
-        subprocess.run(
-            ["rm", "-rf", str(dir_path)],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        # Now remove either the directory or only its contents
+        if keep_dir:
+            if not dir_path.exists():
+                break
+            for child in list(dir_path.iterdir()):
+                subprocess.run(
+                    ["rm", "-rf", str(child)],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+        else:
+            subprocess.run(
+                ["rm", "-rf", str(dir_path)],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
         # Check if removal succeeded
-        if not dir_path.exists():
-            break
+        if keep_dir:
+            # Success when directory exists and is empty, or when it no longer exists
+            if not dir_path.exists():
+                break
+            try:
+                next(dir_path.iterdir())
+                # Has children, not yet successful
+                success = False
+            except StopIteration:
+                success = True
+
+            if success:
+                break
+        else:
+            if not dir_path.exists():
+                break
 
         # Wait before retry (only on non-final attempts)
         if attempt < max_attempts - 1:
             time.sleep(0.1)
 
-    # If the directory still exists after all attempts, log a warning
-    if dir_path.exists():
-        tty.warn(f"Failed to remove directory {dir_path} after {max_attempts} attempts")
+    # If removal didn't reach the intended state after attempts, log a warning
+    if keep_dir:
+        if dir_path.exists() and any(dir_path.iterdir()):
+            tty.warn(
+                f"Failed to remove contents of directory {dir_path} after {max_attempts} attempts"
+            )
+    else:
+        if dir_path.exists():
+            tty.warn(f"Failed to remove directory {dir_path} after {max_attempts} attempts")
 
 
 def remove_view(local_env_dir):
@@ -131,3 +168,42 @@ def remove_view(local_env_dir):
     # Remove ._view directory
     if dotview_path.exists():
         remove_dir(dotview_path)
+
+
+def runtime_library_dirs(view_path):
+    """Return runtime library directories from a Spack view.
+
+    The returned list is ordered and de-duplicated, and includes nested
+    directories named ``lib`` or ``lib64`` (for packages like oneAPI TBB that
+    install libraries outside top-level view/lib).
+    """
+
+    view_path = Path(view_path)
+    if not view_path.exists():
+        return []
+
+    lib_dir_names = {"lib", "lib64"}
+    seen = set()
+    ordered = []
+
+    def _add_path(path):
+        if not path.exists():
+            return
+        resolved = path.resolve().as_posix()
+        if resolved not in seen:
+            seen.add(resolved)
+            ordered.append(resolved)
+
+    for name in ("lib", "lib64"):
+        _add_path(view_path / name)
+
+    for root, dirnames, _ in os.walk(view_path, topdown=True, followlinks=False):
+        root_path = Path(root)
+        if root_path.name in lib_dir_names:
+            _add_path(root_path)
+
+        for dirname in sorted(dirnames):
+            if dirname in lib_dir_names:
+                _add_path(root_path / dirname)
+
+    return ordered

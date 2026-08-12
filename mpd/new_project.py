@@ -1,11 +1,11 @@
 from pathlib import Path
 
 import spack.environment as ev
-import spack.llnl.util.tty as tty
 
 from .concretize import concretize_project
 from .config import mpd_project_exists, print_config_info, project_config_from_args, select, update
 from .preconditions import State, preconditions
+from .spack_compat import tty
 from .util import bold, gray, remove_view
 
 SUBCOMMAND = "new-project"
@@ -29,14 +29,13 @@ def setup_subparser(subparsers):
     new_project.add_argument(
         "-S",
         "--srcs",
-        help="directory containing repositories to develop\n"
-        "(default: <top-level directory>/srcs)",
+        help="directory containing repositories to develop\n(default: <top-level directory>/srcs)",
     )
     new_project.add_argument(
         "-f", "--force", action="store_true", help="overwrite existing project with same name"
     )
     new_project.add_argument(
-        "-E", "--env", help="environment from which to create project\n(multiple allowed)"
+        "-E", "--env", help="environment (name or absolute path) from which to create project"
     )
     new_project.add_argument(
         "-y", "--yes-to-all", action="store_true", help="Answer yes/default to all prompts"
@@ -52,6 +51,13 @@ def setup_subparser(subparsers):
         dest="dependencies",
         metavar=("SPEC", "CONSTRAINT"),
         help="specify a package with constraints (e.g., root %%gcc@11, foo ^bar@x.y.z)\n"
+        "(can be specified multiple times)",
+    )
+    new_project.add_argument(
+        "--env-var-prepend",
+        action="append",
+        metavar="<ENV_VAR>=<suffix>",
+        help="prepend colon-separated paths to ENV_VAR for each checked-out package\n"
         "(can be specified multiple times)",
     )
     new_project.add_argument("variants", nargs="*", help="variants to apply to developed packages")

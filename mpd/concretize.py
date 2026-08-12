@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -11,19 +12,34 @@ import spack.cmd
 import spack.compilers
 import spack.compilers.config
 import spack.environment as ev
-import spack.llnl.util.tty as tty
+import spack.environment.shell as ev_shell
+import spack.repo
 import spack.store
 import spack.util.spack_yaml as syaml
 from spack import traverse
 from spack.spec import InstallStatus
 
 from .config import update
-from .util import bold, cyan, get_number, gray, make_yaml_file, yellow
+from .spack_compat import config_set, tty
+from .util import bold, cyan, get_number, gray, make_yaml_file, runtime_library_dirs, yellow
 
 SUBCOMMAND = "new-project"
 ALIASES = ["n"]
 
 CMAKE_CACHE_VARIABLE_PATTERN = re.compile(r"-D(.*):(.*)=(.*)")
+
+
+def _run(cmd):
+    """Run cmd, capturing output. On failure, print stderr then raise."""
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        if result.stderr:
+            # Write to stderr, not stdout: stdout is block-buffered when piped,
+            # which lets our own error message overtake the child's explanation
+            # of why it failed.
+            print(result.stderr, end="", file=sys.stderr)
+        result.check_returncode()
+    return result
 
 
 def all_available_compilers():
@@ -175,15 +191,17 @@ def cmake_presets(project_config, dependencies, cetmodules4, view_path):
     compiler_paths = project_config["compiler_paths"]
 
     cxxstd = project_config["cxxstd"]["value"]
-    view_lib_dirs = [(view_path / d).resolve().as_posix() for d in ("lib", "lib64")]
+    view_lib_dirs = runtime_library_dirs(view_path)
+    rpath_value = ";".join(view_lib_dirs)
 
     configure_presets = {
         "CMAKE_BUILD_TYPE": {"type": "STRING", "value": "RelWithDebInfo"},
         "CMAKE_CXX_EXTENSIONS": {"type": "BOOL", "value": "OFF"},
         "CMAKE_CXX_STANDARD_REQUIRED": {"type": "BOOL", "value": "ON"},
         "CMAKE_CXX_STANDARD": {"type": "STRING", "value": cxxstd},
+        "CMAKE_BUILD_RPATH": {"type": "STRING", "value": rpath_value},
         "CMAKE_INSTALL_RPATH_USE_LINK_PATH": {"type": "BOOL", "value": "ON"},
-        "CMAKE_INSTALL_RPATH": {"type": "STRING", "value": ";".join(view_lib_dirs)},
+        "CMAKE_INSTALL_RPATH": {"type": "STRING", "value": rpath_value},
     }
 
     if cetmodules4:
@@ -321,6 +339,55 @@ def ordered_roots(env, package_requirements):
     return [install_prefixes[p] for p in sorted_packages]
 
 
+<<<<<<< HEAD
+=======
+def verify_develop_versions(packages) -> None:
+    """Verify that each developed package's recipe declares a "develop" version.
+
+    MPD builds every cloned package from its checked-out sources, which it
+    expresses as a hard ``require: ["@develop"]`` (see _DEVELOP_VARIANT in
+    config.py).  A recipe that declares no develop version therefore cannot
+    concretize.  Spack reports that as a failed version requirement, naming a
+    version the user never typed and no recipe to fix, so check it up front
+    where the offending recipe can be named instead.
+    """
+    missing_develop = {}
+
+    for pkg_name in packages:
+        try:
+            pkg_cls = spack.repo.PATH.get_pkg_class(pkg_name)
+        except spack.repo.UnknownPackageError:
+            # Source directories that match no recipe are already reported when
+            # the project's sources are scanned; nothing to add here.
+            continue
+
+        if not any(str(v) == "develop" for v in pkg_cls.versions):
+            missing_develop[pkg_name] = spack.repo.PATH.filename_for_package_name(pkg_name)
+
+    if not missing_develop:
+        return
+
+    indent = " " * len("==> Error: ")
+    error_msg = (
+        "MPD builds each cloned package from its checked-out sources, which\n"
+        f"{indent}requires a {bold('develop')} version in the package's recipe.\n"
+        f"{indent}The following recipes do not declare one:\n"
+    )
+    for pkg_name, recipe in sorted(missing_develop.items()):
+        error_msg += "\n - " + bold(pkg_name)
+        error_msg += f"\n     recipe: {yellow(recipe)}"
+        error_msg += "\n     add:    " + yellow('version("develop", branch="develop")')
+    error_msg += (
+        f"\n\n{indent}Substitute the repository's actual development branch if it is\n"
+        f"{indent}not named 'develop'.\n"
+        f"\n\nYou may use {cyan('spack edit <package>')} to add this to the recipe."
+        f"\nIf you do, please make a pull request for that repo."
+    )
+
+    print()
+    tty.die(error_msg + "\n")
+
+
 def verify_no_missing_intermediate_deps(env, packages, ignored_packages) -> None:
     direct_dependents = {}
     missing_intermediate_deps = {}
@@ -418,7 +485,8 @@ def setup_environment_items(project_config):
     """
     from_items = []
     include_list = []
-    if proto_env := project_config["env"]:
+    proto_env = project_config["env"]
+    if proto_env:
         # If an external environment is used, we really, really want to use that one.
         from_items += [{"type": "environment", "path": proto_env}]
 
@@ -459,7 +527,7 @@ def setup_compiler_symlinks(project_config):
 
 
 def create_initial_environment(
-    project_config, packages, package_requirements, from_items, include_list, compiler_symlinks_dir
+    project_config, packages, package_requirements, from_items, include_list
 ):
     """Create and concretize the initial Spack environment.
 
@@ -473,7 +541,6 @@ def create_initial_environment(
     reuse_block = {"from": from_items}
 
     full_block = dict(
-        env_vars=dict(prepend_path=dict(PATH=str(compiler_symlinks_dir))),
         config=dict(deprecated=True),
         specs=list(packages.keys()),
         concretizer=dict(unify=True, reuse=reuse_block),
@@ -495,7 +562,7 @@ def create_initial_environment(
     update(project_config, status="created")
 
     tty.info(gray("Concretizing initial environment"))
-    subprocess.run(["spack", "-e", name, "concretize"], capture_output=True).check_returncode()
+    _run(["spack", "-e", name, "concretize"])
 
     return ev.read(name)
 
@@ -515,7 +582,8 @@ def extract_cmake_args(env, packages):
         # builder interface, which also supports packages that provide a CMakeBuilder
         # class.
         pkg_builder = builder.create(s.package)
-        if cmake_args_method := getattr(pkg_builder, "cmake_args", False):
+        cmake_args_method = getattr(pkg_builder, "cmake_args", False)
+        if cmake_args_method:
             cmake_args[s.name] = cmake_args_method()
 
     return cmake_args
@@ -530,7 +598,8 @@ def collect_first_order_dependencies(env, packages, project_config):
     first_order_deps = {"cmake"}
 
     chosen_compiler = None
-    if compiler := project_config.get("compiler"):
+    compiler = project_config.get("compiler")
+    if compiler:
         found_compilers = spack.cmd.parse_specs(compiler["value"])
         if not found_compilers:
             indent = " " * len("==> Error: ")
@@ -557,13 +626,14 @@ def collect_first_order_dependencies(env, packages, project_config):
             if dep.spec.satisfies(chosen_compiler):
                 # The development environment should not include the compiler as a root spec.
                 continue
-            if dep.spec.name == "cetmodules":
-                # Do not use cetmodules4 if one of the dependencies does not use version 4.
-                cetmodules4 = cetmodules4 and dep.spec.version.up_to(1) == 4
-                continue
             if dep.spec.external:
                 # We don't need to (and probably shouldn't) include things like glibc.
                 continue
+
+            if dep.spec.name == "cetmodules":
+                # Do not use cetmodules4 if one of the dependencies does not use version 4.
+                cetmodules4 = cetmodules4 and str(dep.spec.version.up_to(1)) == "4"
+
             first_order_deps.add(dep.spec.name)
 
     # gcc-runtime is a build-time dependency that will be built if needed.
@@ -585,29 +655,90 @@ def finalize_environment(project_config, packages, first_order_deps):
     for dep in sorted_first_order_deps:
         new_roots += f"\n    - {dep}"
     tty.msg(gray(new_roots))
-    subprocess.run(
-        ["spack", "-D", local_env_dir, "add"] + list(sorted_first_order_deps), capture_output=True
-    ).check_returncode()
+    _run(["spack", "-D", local_env_dir, "add"] + list(sorted_first_order_deps))
 
-    subprocess.run(
-        ["spack", "-D", local_env_dir, "concretize"], capture_output=True
-    ).check_returncode()
+    _run(["spack", "-D", local_env_dir, "concretize"])
 
     tty.info(gray("Finalizing concretization"))
 
     # Lastly, remove the developed packages from the environment
-    subprocess.run(
-        ["spack", "-D", local_env_dir, "rm"] + list(packages.keys()), capture_output=True
-    ).check_returncode()
-    subprocess.run(
-        ["spack", "-D", local_env_dir, "concretize"], capture_output=True
-    ).check_returncode()
+    _run(["spack", "-D", local_env_dir, "rm"] + list(packages.keys()))
+    _run(["spack", "-D", local_env_dir, "concretize"])
 
     update(project_config, status="concretized")
     return ev.Environment(local_env_dir)
 
 
-def handle_installation(project_config, env, packages, yes_to_all):
+def _cmake_workaround_for_python_package(
+    development_env, local_env_dir, pkg_name, env_section, var_name, subpath=None
+):
+    """If pkg_name is a root spec, update env_vars in spack.yaml with its site-packages path.
+
+    Args:
+        pkg_name: Spack package name to look for among concrete roots.
+        env_section: Key under env_vars to update (e.g. 'prepend_path' or 'set').
+        var_name: Environment variable name to set.
+        subpath: Optional subdirectory to append to the site-packages path.
+
+    Returns:
+        ev.Environment: The environment, reloaded from disk if spack.yaml was modified.
+    """
+    spec = next((s for s in development_env.concrete_roots() if s.name == pkg_name), None)
+    if spec is None:
+        return development_env
+
+    try:
+        py_ver = f"python{spec['python'].version.up_to(2)}"
+        site_packages = Path(spec.prefix) / "lib" / py_ver / "site-packages"
+    except KeyError:
+        return development_env
+
+    path_value = str(site_packages / subpath if subpath else site_packages)
+
+    env_yaml_path = Path(local_env_dir) / "spack.yaml"
+    with open(env_yaml_path, "r") as f:
+        env_config = syaml.load(f)
+
+    env_config["spack"]["env_vars"].setdefault(env_section, {})[var_name] = path_value
+
+    with open(env_yaml_path, "w") as f:
+        syaml.dump(env_config, stream=f, default_flow_style=False)
+
+    return ev.Environment(local_env_dir)
+
+
+def _add_compiler_env_vars(local_env_dir, compiler_symlinks_dir):
+    env_yaml_path = Path(local_env_dir) / "spack.yaml"
+    with open(env_yaml_path, "r") as f:
+        env_config = syaml.load(f)
+    env_config["spack"]["env_vars"] = dict(prepend_path=dict(PATH=str(compiler_symlinks_dir)))
+    with open(env_yaml_path, "w") as f:
+        syaml.dump(env_config, stream=f, default_flow_style=False)
+
+
+def _add_env_var_prepend_paths(project_config):
+    env_var_prepend = project_config.get("env_var_prepend", [])
+    if not env_var_prepend:
+        return
+
+    env_yaml_path = Path(project_config["local"]) / "spack.yaml"
+    with open(env_yaml_path, "r") as f:
+        env_config = syaml.load(f)
+
+    env_vars = env_config["spack"].setdefault("env_vars", {})
+    prepend_path = env_vars.setdefault("prepend_path", {})
+
+    build_dir = Path(project_config["build"])
+    package_src_dirs = sorted(set(project_config.get("srcs", {}).values()))
+    for prepend_spec in env_var_prepend:
+        env_var, suffix = prepend_spec.split("=", 1)
+        prepend_path[env_var] = ":".join(str(build_dir / pkg / suffix) for pkg in package_src_dirs)
+
+    with open(env_yaml_path, "w") as f:
+        syaml.dump(env_config, stream=f, default_flow_style=False)
+
+
+def handle_installation(project_config, env, packages, yes_to_all, compiler_symlinks_dir):
     """Handle the installation process with user prompts and execution.
 
     Returns:
@@ -616,7 +747,8 @@ def handle_installation(project_config, env, packages, yes_to_all):
     name = project_config["name"]
     local_env_dir = project_config["local"]
 
-    if absent := absent_dependencies(env, packages, project_config["ignored"]):
+    absent = absent_dependencies(env, packages, project_config["ignored"])
+    if absent:
 
         def _parens_number(i):
             return f"({i})"
@@ -653,22 +785,49 @@ def handle_installation(project_config, env, packages, yes_to_all):
         ncores = get_number("Specify number of cores to use", default=ncores)
 
     tty.msg(gray("Installing development environment\n"))
-    # As of Spack 0.23, an environment should be explicitly activated before invoking
-    # install (i.e. don't use 'spack -e <env> install').
-    result = subprocess.run(
-        f"spack env activate {local_env_dir}; spack install -j{ncores}", shell=True
-    )
 
-    if result.returncode == 0:
+    # As of Spack 0.23, an environment should be explicitly activated before invoking
+    # install (i.e. don't use 'spack -e <env> install').  However, we have to do this without
+    # using a shell-dependent activation and installation method (we don't know which shell
+    # the user will use).
+    result_code = 1
+    development_env = ev.Environment(local_env_dir)
+
+    try:
+        ev_shell.activate(development_env).apply_modifications()
+        config_set("config:build_jobs", ncores, scope="command_line")
+        development_env.install_all()
+        development_env.write()
+        result_code = 0
+    except Exception:
+        result_code = 1
+    finally:
+        ev_shell.deactivate().apply_modifications()
+
         print()
+    if result_code == 0:
+        _add_compiler_env_vars(local_env_dir, compiler_symlinks_dir)
+        _cmake_workaround_for_python_package(
+            development_env, local_env_dir, "py-torch", "prepend_path", "CMAKE_PREFIX_PATH"
+        )
+        _cmake_workaround_for_python_package(
+            development_env, local_env_dir, "py-tensorflow", "set", "TENSORFLOW_DIR", "tensorflow"
+        )
+        _add_env_var_prepend_paths(project_config)
         update(project_config, status="ready")
         tty.msg(
-            f"{bold(name)} is ready for development " f"(e.g type {cyan('spack mpd build ...')})\n"
+            f"{bold(name)} is ready for development (e.g type {cyan('spack mpd build ...')})\n"
         )
+    else:
+        tty.die("Installation failed. Please review the error messages above and try again.\n")
 
 
 def concretize_project(project_config, yes_to_all):
     packages, package_requirements = prepare_package_requirements(project_config)
+
+    # Fail before spending time in the solver--a package with no develop version
+    # cannot satisfy the "@develop" requirement MPD imposes on cloned sources.
+    verify_develop_versions(packages)
 
     print()
     tty.msg(cyan("Determining dependencies") + " (this may take a few minutes)")
@@ -680,12 +839,7 @@ def concretize_project(project_config, yes_to_all):
 
     # Create and concretize initial environment
     env = create_initial_environment(
-        project_config,
-        packages,
-        package_requirements,
-        from_items,
-        include_list,
-        compiler_symlinks_dir,
+        project_config, packages, package_requirements, from_items, include_list
     )
 
     verify_no_missing_intermediate_deps(env, packages, project_config["ignored"])
@@ -704,4 +858,4 @@ def concretize_project(project_config, yes_to_all):
     )
 
     env = finalize_environment(project_config, packages, first_order_deps)
-    handle_installation(project_config, env, packages, yes_to_all)
+    handle_installation(project_config, env, packages, yes_to_all, compiler_symlinks_dir)

@@ -1,11 +1,9 @@
 import shutil
 from pathlib import Path
 
-import spack.config
-import spack.llnl.util.filesystem as fs
-import spack.llnl.util.tty as tty
 import spack.paths
 
+from .spack_compat import config_get, config_set, fs, tty
 from .util import gray
 
 SUBCOMMAND = "init"
@@ -16,8 +14,8 @@ MPD_DIR = Path(spack.paths.prefix) / "var" / "mpd"
 def setup_subparser(subparsers):
     init = subparsers.add_parser(
         SUBCOMMAND,
-        description="initialize MPD on this system",
-        help="initialize MPD on this system",
+        description="initialize MPD for this instance",
+        help="initialize MPD for this instance",
     )
     init.add_argument("-f", "--force", action="store_true", help="allow reinitialization")
     init.add_argument(
@@ -29,7 +27,7 @@ def setup_subparser(subparsers):
 
 
 def mpd_config_dir():
-    return Path(spack.config.get("config:mpd_dir", MPD_DIR.resolve(), scope="site"))
+    return Path(config_get("config:mpd_dir", MPD_DIR.resolve(), scope="site"))
 
 
 def mpd_config_file(config_dir):
@@ -38,6 +36,10 @@ def mpd_config_file(config_dir):
 
 def mpd_selected_projects_dir(config_dir):
     return config_dir / "selected"
+
+
+def known_suites_dir(config_dir):
+    return config_dir / "known_suites"
 
 
 def initialized():
@@ -51,6 +53,7 @@ def initialize_mpd(config_dir):
     config_dir.mkdir(exist_ok=True)
     mpd_config_file(config_dir).touch(exist_ok=True)
     mpd_selected_projects_dir(config_dir).mkdir(exist_ok=True)
+    known_suites_dir(config_dir).mkdir(exist_ok=True)
 
 
 def process(args):
@@ -73,10 +76,10 @@ def process(args):
     # If the value of "config:mpd_dir" has not been set yet, we set it here.  If
     # it has already been set, we are simply setting it to its current value.
     # The default returned by mpd_config_dir() is the value of MPD_DIR.
-    spack.config.set("config:mpd_dir", str(config_dir), scope="site")
+    config_set("config:mpd_dir", str(config_dir), scope="site")
 
     if config_dir.exists() and args.force:
-        tty.warn("Reinitializing MPD on this system will remove all MPD projects")
+        tty.warn("Reinitializing MPD for this Spack instance will remove all MPD projects")
         if args.yes:
             should_reinitialize = True
         else:

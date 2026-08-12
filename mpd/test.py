@@ -1,9 +1,9 @@
 import subprocess
-
-import spack.llnl.util.tty as tty
+import sys
 
 from .config import selected_project_config
 from .preconditions import State, activate_development_environment, preconditions
+from .spack_compat import tty
 from .util import maybe_with_color
 
 SUBCOMMAND = "test"
@@ -46,4 +46,6 @@ def process(args):
     print()
     tty.msg("Testing with command:\n\n" + maybe_with_color("c", arguments_str) + "\n")
 
-    subprocess.run(arguments)
+    result = subprocess.run(arguments)
+    if result.returncode != 0:
+        sys.exit(result.returncode)
