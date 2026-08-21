@@ -5,10 +5,12 @@
 import contextlib
 import re
 
+import pytest
+
 import spack.util.spack_yaml as syaml
 from spack.extensions.mpd import concretize, config
 from spack.extensions.mpd.spack_compat import fs
-from spack.main import SpackCommand
+from spack.main import SpackCommand, SpackCommandError
 
 
 # The default value of the top-level directory changes depending on the working
@@ -74,6 +76,46 @@ def test_new_project_all_default_paths(with_mpd_init, tmp_path):
         out = mpd("status")
         assert re.search(r"Selected project:\s+a", out, re.DOTALL)
         assert "Development status: not concretized" in out
+
+
+def test_new_project_top_dot_uses_current_directory_name(with_mpd_init, tmp_path):
+    project_dir = tmp_path / "dot-project"
+
+    with new_project(top=".", cwd=project_dir) as out:
+        assert "Creating project: dot-project" in out
+        assert config.selected_project() == "dot-project"
+        assert config.selected_project_config()["name"] == "dot-project"
+
+        status = mpd("status")
+        assert re.search(r"Selected project:\s+dot-project", status, re.DOTALL)
+
+
+def test_new_project_top_dot_slash_uses_current_directory_name(with_mpd_init, tmp_path):
+    project_dir = tmp_path / "slash-project"
+
+    with new_project(top="./", cwd=project_dir):
+        assert config.selected_project() == "slash-project"
+
+
+def test_new_project_relative_top_uses_resolved_directory_name(with_mpd_init, tmp_path):
+    working_dir = tmp_path / "working-dir"
+    project_dir = tmp_path / "relative-project"
+
+    with new_project(top="../relative-project", cwd=working_dir):
+        assert config.selected_project() == "relative-project"
+        assert config.selected_project_config()["top"] == str(project_dir)
+
+
+def test_new_project_explicit_name_overrides_top_directory_name(with_mpd_init, tmp_path):
+    project_dir = tmp_path / "directory-name"
+
+    with new_project(name="explicit-name", top=".", cwd=project_dir):
+        assert config.selected_project() == "explicit-name"
+
+
+def test_new_project_root_top_requires_name(with_mpd_init):
+    with pytest.raises(SpackCommandError):
+        mpd("new-project", "--top", "/")
 
 
 def test_new_project_only_top_path(with_mpd_init, tmp_path):
