@@ -1,5 +1,6 @@
 import spack.config
 import spack.environment as ev
+import spack.store
 
 try:
     import spack.llnl.util.filesystem as fs
@@ -45,3 +46,11 @@ def active_environment():
         return ev.get_active_environment()
 
     return None
+
+
+def install_status(spec):
+    """Return the installation status of a spec across Spack versions."""
+    if hasattr(spec, "install_status"):
+        return spec.install_status()
+
+    return spack.store.STORE.db.install_status(spec)

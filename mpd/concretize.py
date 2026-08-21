@@ -20,7 +20,7 @@ from spack import traverse
 from spack.spec import InstallStatus
 
 from .config import update
-from .spack_compat import config_set, tty
+from .spack_compat import config_set, install_status, tty
 from .util import bold, cyan, get_number, gray, make_yaml_file, runtime_library_dirs, yellow
 
 SUBCOMMAND = "new-project"
@@ -439,7 +439,7 @@ def absent_dependencies(env, packages, ignored_packages) -> list:
         if n.name in ignored_packages:
             continue
 
-        if n.install_status() == InstallStatus.absent:
+        if install_status(n) == InstallStatus.absent:
             absent.append(n.cshort_spec)
 
     return sorted(set(absent))
