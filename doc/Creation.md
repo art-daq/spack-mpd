@@ -51,8 +51,11 @@ optional arguments:
 A few observations:
 
 - `--name` is required unless `--top` is specified, in which case the
-  project name defaults to the name of the top-level directory.  All
-  other program options have defaults provided by MPD.
+  project name defaults to the name of the canonicalized top-level directory.
+  For example, `spack mpd new-project --top .` from within a directory named
+  `my-project` creates a project named `my-project`.  If the top-level path has
+  no basename, such as `/`, specify `--name` explicitly.  All other program
+  options have defaults provided by MPD.
 
 - The default top-level directory of your MPD project is the current
   working directory (the one in which you invoke `spack mpd

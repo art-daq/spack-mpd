@@ -630,8 +630,14 @@ def select_compiler(desired_compiler):
 
 def project_config_from_args(args):
     project = comments.CommentedMap()
-    top_path = Path(args.top)
-    project["name"] = args.name if args.name else top_path.name
+    top_path = Path(args.top).expanduser().resolve()
+    project_name = args.name if args.name else top_path.name
+    if not project_name:
+        tty.die(
+            "Could not infer an MPD project name from the top-level directory. "
+            "Please specify one with '--name'."
+        )
+    project["name"] = project_name
     project["env"] = args.env
 
     srcs_path = Path(args.srcs) if args.srcs else top_path / "srcs"

@@ -20,7 +20,7 @@ from spack import traverse
 from spack.spec import InstallStatus
 
 from .config import update
-from .spack_compat import config_set, tty
+from .spack_compat import config_set, install_status, tty
 from .util import bold, cyan, get_number, gray, make_yaml_file, runtime_library_dirs, yellow
 
 SUBCOMMAND = "new-project"
@@ -118,7 +118,10 @@ def cmake_develop(project_config, package_cmake_args):
         out.write(
             f"""set(CWD "{file_dir}")
 macro(develop pkg)
-  set(CMAKE_INSTALL_PREFIX ${{${{pkg}}_INSTALL_PREFIX}})
+  install(CODE "execute_process(COMMAND spack python ensure-install-directory.py\\
+                                        {project_name} ${{${{pkg}}_HASH}}\\
+                                WORKING_DIRECTORY ${{CWD}})")
+  install(CODE "set(CMAKE_INSTALL_PREFIX ${{${{pkg}}_INSTALL_PREFIX}})")
   string(REPLACE "-" "_" pkg_with_underscores ${{pkg}})
   string(TOLOWER "${{pkg_with_underscores}}" pkg_with_underscores)
   if (COMMAND set_${{pkg_with_underscores}}_variables)
@@ -433,7 +436,7 @@ def absent_dependencies(env, packages, ignored_packages) -> list:
         if n.name in ignored_packages:
             continue
 
-        if n.install_status() == InstallStatus.absent:
+        if install_status(n) == InstallStatus.absent:
             absent.append(n.cshort_spec)
 
     return sorted(set(absent))
