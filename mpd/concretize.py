@@ -121,7 +121,7 @@ macro(develop pkg)
   install(CODE "execute_process(COMMAND spack python ensure-install-directory.py\\
                                         {project_name} ${{${{pkg}}_HASH}}\\
                                 WORKING_DIRECTORY ${{CWD}})")
-  set(CMAKE_INSTALL_PREFIX ${{${{pkg}}_INSTALL_PREFIX}})
+  install(CODE "set(CMAKE_INSTALL_PREFIX ${{${{pkg}}_INSTALL_PREFIX}})")
   string(REPLACE "-" "_" pkg_with_underscores ${{pkg}})
   string(TOLOWER "${{pkg_with_underscores}}" pkg_with_underscores)
   if (COMMAND set_${{pkg_with_underscores}}_variables)
